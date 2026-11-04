@@ -1,0 +1,11 @@
+.idea/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+KISHOR/
+cache_storage/*
+data/fifo_cache/
+*.log
+.env
