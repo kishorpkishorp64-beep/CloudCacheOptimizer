@@ -1,0 +1,243 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CloudCacheOptimizer Dashboard</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 25px;
+            font-family: Arial, sans-serif;
+            background: #f1f5f9;
+            color: #1e293b;
+        }
+
+        header {
+            background: #172554;
+            color: white;
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+        }
+
+        header h1 {
+            margin: 0 0 10px;
+        }
+
+        header p {
+            margin: 0;
+            color: #cbd5e1;
+        }
+
+        .status {
+            margin-top: 12px;
+            font-size: 14px;
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 18px;
+        }
+
+        .card {
+            background: white;
+            padding: 22px;
+            border-radius: 12px;
+            box-shadow: 0 3px 12px #0000000d;
+        }
+
+        .card h3 {
+            font-size: 14px;
+            color: #64748b;
+            margin: 0 0 15px;
+        }
+
+        .value {
+            font-size: 30px;
+            font-weight: bold;
+        }
+
+        .section {
+            background: white;
+            margin-top: 22px;
+            padding: 24px;
+            border-radius: 12px;
+        }
+
+        .bar-background {
+            background: #e2e8f0;
+            height: 22px;
+            border-radius: 20px;
+            overflow: hidden;
+            margin: 15px 0;
+        }
+
+        .bar {
+            height: 100%;
+            width: 0;
+            background: #2563eb;
+            transition: width 0.4s;
+        }
+
+        button {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 11px 18px;
+            border-radius: 7px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        #message {
+            color: #64748b;
+            margin-top: 15px;
+        }
+
+        footer {
+            margin-top: 25px;
+            color: #64748b;
+            font-size: 13px;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>CloudCacheOptimizer</h1>
+        <p>AI-powered cache monitoring dashboard</p>
+        <div class="status" id="status">Connecting to API...</div>
+    </header>
+
+    <div class="cards">
+        <div class="card">
+            <h3>Cache Hits</h3>
+            <div class="value" id="hits">0</div>
+        </div>
+
+        <div class="card">
+            <h3>Cache Misses</h3>
+            <div class="value" id="misses">0</div>
+        </div>
+
+        <div class="card">
+            <h3>Hit Rate</h3>
+            <div class="value" id="hitRate">0%</div>
+        </div>
+
+        <div class="card">
+            <h3>Evictions</h3>
+            <div class="value" id="evictions">0</div>
+        </div>
+
+        <div class="card">
+            <h3>Cached Objects</h3>
+            <div class="value" id="objects">0</div>
+        </div>
+
+        <div class="card">
+            <h3>Storage Used</h3>
+            <div class="value" id="storage">0 KB</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Cache Storage Usage</h2>
+        <p id="storageText">0 KB used out of 1024 KB</p>
+
+        <div class="bar-background">
+            <div class="bar" id="storageBar"></div>
+        </div>
+
+        <p>Cache capacity: 1 MB</p>
+    </div>
+
+    <div class="section">
+        <h2>Cache Performance</h2>
+        <p>Cache hit rate</p>
+
+        <div class="bar-background">
+            <div class="bar" id="hitBar"></div>
+        </div>
+
+        <p id="performanceText">Waiting for statistics...</p>
+
+        <button onclick="loadStats()">Refresh Statistics</button>
+        <p id="message">Waiting for API response...</p>
+    </div>
+
+    <footer>
+        CloudCacheOptimizer | AI Cache Monitoring
+    </footer>
+
+    <script>
+        async function loadStats() {
+            const message = document.getElementById("message");
+            const status = document.getElementById("status");
+
+            message.textContent = "Loading statistics...";
+
+            try {
+                const response = await fetch("http://127.0.0.1:5000/stats");
+
+                if (!response.ok) {
+                    throw new Error("API returned status " + response.status);
+                }
+
+                const data = await response.json();
+
+                document.getElementById("hits").textContent = data.cache_hits;
+                document.getElementById("misses").textContent = data.cache_misses;
+                document.getElementById("hitRate").textContent =
+                    data.hit_rate_percent + "%";
+                document.getElementById("evictions").textContent = data.evictions;
+                document.getElementById("objects").textContent = data.cached_objects;
+
+                const usedKB = data.cache_size_bytes / 1024;
+                const usedMB = data.cache_size_bytes / (1024 * 1024);
+
+                document.getElementById("storage").textContent =
+                    usedKB.toFixed(2) + " KB";
+
+                document.getElementById("storageText").textContent =
+                    usedKB.toFixed(2) + " KB used out of 1024 KB";
+
+                document.getElementById("storageBar").style.width =
+                    Math.min(usedMB * 100, 100) + "%";
+
+                document.getElementById("hitBar").style.width =
+                    Math.min(Math.max(data.hit_rate_percent, 0), 100) + "%";
+
+                document.getElementById("performanceText").textContent =
+                    "Current hit rate: " + data.hit_rate_percent + "%";
+
+                status.textContent = "API Connected | Strategy: " +
+                    data.cache_strategy;
+
+                message.textContent =
+                    "Statistics updated successfully.";
+
+            } catch (error) {
+                status.textContent = "API Disconnected";
+                message.textContent =
+                    "Could not connect to the API. Make sure api/app.py is running.";
+                console.error(error);
+            }
+        }
+
+        loadStats();
+        setInterval(loadStats, 5000);
+    </script>
+</body>
+</html>
