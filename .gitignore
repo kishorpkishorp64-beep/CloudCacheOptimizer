@@ -9,3 +9,7 @@ cache_storage/*
 data/fifo_cache/
 *.log
 .env
+# Google Drive OAuth credentials
+credentials/
+token.json
+*.token
