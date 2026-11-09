@@ -1,20 +1,83 @@
+
 from pathlib import Path
+from io import BytesIO
 
 from flask import Flask, jsonify, request, Response, send_from_directory
 
 from cache_engine.ai_cache import AICache
+from google_drive import connect_google_drive
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
-ORIGIN_DIR = PROJECT_DIR / "origin_storage"
 CACHE_DIR = PROJECT_DIR / "cache_storage"
+DASHBOARD_DIR = PROJECT_DIR / "dashboard"
 
-ORIGIN_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Only use this dedicated Google Drive test folder.
+TEST_FOLDER_ID = "1FLdb5-b0m-3-AQUFXn0xmGLKOg1_DfrS"
 
 app = Flask(__name__)
 
 cache = AICache(CACHE_DIR, max_size_mb=1)
-DASHBOARD_DIR = PROJECT_DIR / "dashboard"
+
+# Connect only when a Drive operation is requested.
+drive_service = None
+
+
+def get_drive_service():
+    global drive_service
+
+    if drive_service is None:
+        drive_service = connect_google_drive()
+
+    return drive_service
+
+
+def find_drive_file(service, filename):
+    """Find a file and verify its test-folder location."""
+
+    safe_name = filename.replace("\\", "\\\\").replace("'", "\\'")
+
+    results = service.files().list(
+        q=f"name = '{safe_name}' and trashed = false",
+        pageSize=100,
+        fields="files(id, name, parents)"
+    ).execute()
+
+    files = results.get("files", [])
+
+    # Keep only files inside our dedicated test folder.
+    matching_files = [
+        file for file in files
+        if TEST_FOLDER_ID in file.get("parents", [])
+    ]
+
+    if len(matching_files) > 1:
+        raise ValueError(
+            "Multiple files with this name exist in the test folder."
+        )
+
+    return matching_files[0] if matching_files else None
+
+
+def download_from_drive(service, file_id):
+    """Download a file from Google Drive into memory."""
+
+    request_file = service.files().get_media(fileId=file_id)
+
+    buffer = BytesIO()
+    downloader = MediaIoBaseDownload(buffer, request_file)
+
+    done = False
+
+    while not done:
+        status, done = downloader.next_chunk()
+        if status:
+            print(f"Google Drive download: {int(status.progress() * 100)}%")
+
+    return buffer.getvalue()
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -28,6 +91,7 @@ def home():
         "service": "Cloud Computing Cache Optimizer",
         "status": "running",
         "cache_strategy": "AI",
+        "storage": "Google Drive",
         "endpoints": {
             "health": "/health",
             "get_object": "/objects/<filename>",
@@ -47,23 +111,35 @@ def get_object(filename):
     if not filename or Path(filename).name != filename:
         return jsonify({"error": "Invalid filename"}), 400
 
-    # Check the AI cache first.
+    # 1. Check the AI cache first.
     content = cache.get(filename)
 
     if content is not None:
         return Response(content, mimetype="application/octet-stream")
 
-    # On a cache miss, retrieve the original object.
-    original_file = ORIGIN_DIR / filename
+    # 2. On a cache miss, retrieve the file from Google Drive.
+    try:
+        service = get_drive_service()
+        drive_file = find_drive_file(service, filename)
 
-    if not original_file.is_file():
-        return jsonify({"error": "Object not found"}), 404
+        if drive_file is None:
+            return jsonify({
+                "error": "Object not found in Google Drive test folder"
+            }), 404
 
-    content = original_file.read_bytes()
+        content = download_from_drive(service, drive_file["id"])
 
-    # Ask the AI cache to store the object if it fits.
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 409
+
+    except Exception:
+        app.logger.exception("Google Drive retrieval failed")
+        return jsonify({"error": "Google Drive retrieval failed"}), 502
+
+    # 3. Store the downloaded file in the AI cache if it fits.
     cache.put(filename, content)
 
+    # 4. Return the file.
     return Response(content, mimetype="application/octet-stream")
 
 
@@ -77,15 +153,50 @@ def upload_object(filename):
     if len(content) > 1024 * 1024:
         return jsonify({"error": "Upload limit is 1 MB"}), 413
 
-    original_file = ORIGIN_DIR / filename
-    original_file.write_bytes(content)
+    try:
+        service = get_drive_service()
 
-    # Remove any stale cached copy after an upload or update.
+        # Search only inside the dedicated test folder.
+        existing_file = find_drive_file(service, filename)
+
+        file_metadata = {
+            "name": filename,
+            "parents": [TEST_FOLDER_ID]
+        }
+
+        media = MediaIoBaseUpload(
+            BytesIO(content),
+            mimetype="application/octet-stream",
+            resumable=False
+        )
+
+        if existing_file:
+            uploaded_file = service.files().update(
+                fileId=existing_file["id"],
+                media_body=media,
+                fields="id, name"
+            ).execute()
+        else:
+            uploaded_file = service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields="id, name, parents"
+            ).execute()
+
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 409
+
+    except Exception:
+        app.logger.exception("Google Drive upload failed")
+        return jsonify({"error": "Google Drive upload failed"}), 502
+
+    # Remove an old cached copy after a successful upload.
     cache.remove(filename)
 
     return jsonify({
-        "message": "Object saved to original storage",
-        "filename": filename,
+        "message": "Object saved to Google Drive test folder",
+        "filename": uploaded_file["name"],
+        "file_id": uploaded_file["id"],
         "size_bytes": len(content),
     }), 201
 
